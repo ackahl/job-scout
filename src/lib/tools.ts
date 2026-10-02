@@ -233,7 +233,7 @@ async function candidatePostings(employer: Employer, role: string): Promise<Cand
   return out.slice(0, 80);
 }
 
-async function searchCompany(
+async function searchCompanyOnce(
   employer: Employer,
   role: string,
   status: Status,
@@ -270,6 +270,28 @@ async function searchCompany(
     console.error("[find_open_roles]", employer.name, error);
     return { result: { ...base, rows: [], note: "Search failed for this company. Try again." }, learnedHosts: [] };
   }
+}
+
+// A title search that comes up empty falls back to what the company does have open,
+// so the user always sees real openings instead of an empty table.
+async function searchCompany(
+  employer: Employer,
+  role: string,
+  status: Status,
+): Promise<{ result: CompanyResult; learnedHosts: string[] }> {
+  const first = await searchCompanyOnce(employer, role, status);
+  if (!role || first.result.rows.length > 0) return first;
+  status(`No "${role}" title shots at ${employer.name}... pulling everything they DO have open...`);
+  const any = await searchCompanyOnce(employer, "", status);
+  if (any.result.rows.length === 0) return first;
+  return {
+    result: {
+      ...any.result,
+      fallback: true,
+      note: `No "${role}" openings at ${employer.name} right now. Here's what they do have open:`,
+    },
+    learnedHosts: any.learnedHosts,
+  };
 }
 
 export async function runFindOpenRoles(
@@ -312,6 +334,7 @@ export async function runFindOpenRoles(
         company: c.company,
         job_board: c.boardUrl,
         postings: c.rows,
+        ...(c.fallback ? { no_match_for_role: true, showing: "other current openings at this company" } : {}),
         ...(c.note ? { note: c.note } : {}),
       })),
     }),

@@ -18,7 +18,8 @@ export type CompanyResult = {
   company: string;
   boardUrl: string | null;
   rows: RoleRow[];
-  note?: string; // why a company came back empty, if it did
+  note?: string; // why a company came back empty, or that these are fallback openings
+  fallback?: boolean; // true when no postings matched the role and these are other openings
 };
 
 export type RoleSearch = {

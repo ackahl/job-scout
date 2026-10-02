@@ -54,6 +54,11 @@ export function CaseFile({ search }: { search: RoleSearch }) {
               </p>
             ) : (
               <>
+                {c.note && (
+                  <p className="border-b border-rope/60 px-4 py-2 text-sm text-chalk-dim">
+                    <span className="font-poster uppercase tracking-wide text-gold">Switch-up.</span> {c.note}
+                  </p>
+                )}
                 {/* Table on wider screens */}
                 <table className="hidden w-full border-collapse text-left text-base sm:table">
                   <thead>
