@@ -56,6 +56,9 @@ const NOT_A_SALARY = /owner[\s/-]*op|\bo\/o\b|lease[\s-]*(purchase|operator)|ind
 // Driving ads that quote truck revenue as pay: treat anything over this as not a salary.
 const DRIVING = /\bcdl\b|truck|driver|\botr\b|freight|haul/i;
 const DRIVING_PAY_CEILING = 200_000;
+// Entry-level titles quoting six-figure-plus pay are data-entry errors (usually an hourly rate typed as annual).
+const ENTRY_LEVEL = /\b(student|intern|detailer|cashier|crew|team member|clerk|barista|server|cook|dishwasher|housekeep\w*|attendant|porter|stocker|greeter|host(ess)?|busser|valet)\b/i;
+const ENTRY_LEVEL_PAY_CEILING = 150_000;
 
 // Common abbreviations users type in the job type box.
 function expandRole(role: string): string[] {
@@ -114,6 +117,7 @@ export async function adzunaTopJobs(
     .filter((j) => !NOT_A_SALARY.test(j.title ?? ""))
     .filter((j) => !titleRe || titleRe.test(j.title ?? ""))
     .filter((j) => !(DRIVING.test(j.title ?? "") && Math.max(j.salary_min ?? 0, j.salary_max ?? 0) > DRIVING_PAY_CEILING))
+    .filter((j) => !(ENTRY_LEVEL.test(j.title ?? "") && Math.max(j.salary_min ?? 0, j.salary_max ?? 0) > ENTRY_LEVEL_PAY_CEILING))
     .filter((j) => {
       // Same title at the same employer = one opening, even if it's posted under several city names.
       const k = `${(j.title ?? "").toLowerCase().replace(/\s+/g, " ").trim()}|${(j.company?.display_name ?? "").toLowerCase()}`;
