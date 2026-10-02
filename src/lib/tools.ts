@@ -2,6 +2,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { companyTokens, hostOf, isAtsHost, isBlockedHost, listingUrlFor, looksLikePosting, pickBoard, scoreBoardCandidate } from "./board";
+import { adzunaEnabled, adzunaTopJobs } from "./adzuna";
 import { areaText, chooseBoard, extractRows, selectPostings } from "./extract";
 import { firecrawlScrape, markdownLinks, tavilySearch, type ScrapedPage, type TavilyResult } from "./search";
 import type { Area, CompanyResult, Employer, RoleSearch } from "./types";
@@ -415,7 +416,34 @@ export async function runTopContenders(
   const what = role || "jobs";
   status(`Scouting every arena ${areaText(area)} for the top contenders...`);
 
-  // Cast a wide net: three searches, then rank the whole pool by the pay each listing states.
+  // Preferred source: Adzuna's listings database, which covers the whole area and sorts by salary.
+  if (adzunaEnabled()) {
+    try {
+      const { companies, total, scanned } = await adzunaTopJobs(area, role);
+      const search: RoleSearch = {
+        role: role ? `Top contenders: ${role}` : "Top contenders",
+        area: areaText(area),
+        scanned: total,
+        companies,
+      };
+      return {
+        search,
+        forModel: JSON.stringify({
+          note: "The app already shows these as a table, ranked by highest stated pay. Do not repeat the table.",
+          source: "Adzuna job listings database",
+          area: areaText(area),
+          postings_in_area: total,
+          ranked_from: scanned,
+          ranking: "stated pay first (highest first); 'Adzuna est.' means the employer did not state pay and the figure is Adzuna's estimate",
+          results: companies.map((c) => ({ employer: c.company, postings: c.rows })),
+        }),
+      };
+    } catch (error) {
+      console.error("[top_contenders] Adzuna failed, falling back to web search", error);
+    }
+  }
+
+  // Fallback: cast a wide net with web search, then rank the whole pool by the pay each listing states.
   const [atsPay, atsAny, open] = await Promise.all([
     tavilySearch(`${what} ${location} salary pay range`, { maxResults: 20, includeDomains: ATS_SEARCH_DOMAINS }).catch(() => []),
     tavilySearch(`${what} ${location}`, { maxResults: 20, includeDomains: ATS_SEARCH_DOMAINS }).catch(() => []),

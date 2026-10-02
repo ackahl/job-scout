@@ -9,6 +9,9 @@ function StatusTag({ status }: { status: RoleRow["status"] }) {
 }
 
 function Pay({ pay }: { pay: string }) {
+  if (/^not listed \(adzuna est\./i.test(pay)) {
+    return <span className="text-chalk-dim">{pay.replace(/^Not listed \((.*)\)$/, "$1")}</span>;
+  }
   if (/^not listed$/i.test(pay)) {
     return <span className="font-poster text-sm uppercase tracking-wide text-neon">Ducking it</span>;
   }
@@ -25,7 +28,7 @@ export function CaseFile({ search }: { search: RoleSearch }) {
           {search.area && <span className="ml-2 font-cond text-base normal-case tracking-normal text-chalk-dim">{search.area}</span>}
         </h2>
         <span className="font-cond text-sm font-bold uppercase tracking-widest text-chalk-dim">
-          {search.scanned !== undefined && <>Highest-paying of {search.scanned} postings scanned &middot; </>}
+          {search.scanned !== undefined && <>Ranked from {search.scanned.toLocaleString("en-US")} postings &middot; </>}
           {total} title shot{total === 1 ? "" : "s"} &middot; {search.companies.length} opponent
           {search.companies.length === 1 ? "" : "s"}
         </span>
