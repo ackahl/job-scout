@@ -119,6 +119,7 @@ export default function Home() {
           messages: toHistory(next),
           employers,
           homeBase: turf.location.trim() ? { location: turf.location.trim(), radiusMiles: turf.radiusMiles } : null,
+          jobType: turf.jobType?.trim() || null,
         }),
       });
       if (!res.ok || !res.body) {

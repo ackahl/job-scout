@@ -415,25 +415,34 @@ export async function runTopContenders(
   const what = role || "jobs";
   status(`Scouting every arena ${areaText(area)} for the top contenders...`);
 
-  const [open, ats] = await Promise.all([
-    tavilySearch(`${what} hiring ${location} salary apply`, { maxResults: 15, excludeDomains: BLOCKED_FOR_SEARCH }).catch(() => []),
-    tavilySearch(`${what} ${location}`, { maxResults: 15, includeDomains: ATS_SEARCH_DOMAINS }).catch(() => []),
+  // Cast a wide net: three searches, then rank the whole pool by the pay each listing states.
+  const [atsPay, atsAny, open] = await Promise.all([
+    tavilySearch(`${what} ${location} salary pay range`, { maxResults: 20, includeDomains: ATS_SEARCH_DOMAINS }).catch(() => []),
+    tavilySearch(`${what} ${location}`, { maxResults: 20, includeDomains: ATS_SEARCH_DOMAINS }).catch(() => []),
+    tavilySearch(`${what} jobs ${location}`, { maxResults: 20, excludeDomains: BLOCKED_FOR_SEARCH }).catch(() => []),
   ]);
   const seen = new Set<string>();
-  const candidates: Candidate[] = [];
-  for (const r of [...ats, ...open]) {
+  const pool: (Candidate & { hint: number })[] = [];
+  for (const r of [...atsPay, ...atsAny, ...open]) {
     const host = hostOf(r.url);
     const key = r.url.split("?")[0];
     if (!host || isBlockedHost(host) || seen.has(key) || !looksLikePosting(r.url, null)) continue;
     seen.add(key);
-    candidates.push({ text: `${r.title} | ${r.content.replace(/\s+/g, " ").slice(0, 140)}`, url: r.url });
+    const snippet = r.content.replace(/\s+/g, " ");
+    const payBit = snippet.match(/\$\s?[\d,]+(?:\.\d+)?\s*k?(?:\s*(?:-|to|–)\s*\$?\s?[\d,]+(?:\.\d+)?\s*k?)?(?:\s*(?:\/|per|an?)\s*(?:hour|hr|year|yr|annum))?/i)?.[0] ?? "";
+    pool.push({ text: `${r.title} | ${payBit ? `pay: ${payBit} | ` : ""}${snippet.slice(0, 120)}`, url: r.url, hint: payScore(payBit) });
   }
-  if (candidates.length === 0) {
-    return { search: { role: role || "Top contenders", area: areaText(area), companies: [] }, forModel: JSON.stringify({ result: "No postings found in this area." }) };
+  if (pool.length === 0) {
+    return {
+      search: { role: role || "Top contenders", area: areaText(area), scanned: 0, companies: [] },
+      forModel: JSON.stringify({ result: "No postings found in this area." }),
+    };
   }
-
-  const picks = await selectPostings("any employer", role, candidates, 8, area);
-  const chosen = picks.map((i) => candidates[i]);
+  // Highest stated pay first, then the rest; the model drops off-target or out-of-area postings.
+  pool.sort((a, b) => b.hint - a.hint);
+  const shortlist = pool.slice(0, 30);
+  const picks = await selectPostings("any employer", role, shortlist, 10, area);
+  const chosen = picks.map((i) => shortlist[i]).sort((a, b) => b.hint - a.hint).slice(0, 8);
   status(`Tag partner Jax "The Jackhammer" Offerletter is tearing through ${chosen.length} postings ${areaText(area)}...`);
   const pages = (await Promise.all(chosen.map((c) => firecrawlScrape(c.url, { waitForMs: 1500 })))).filter(
     (p): p is NonNullable<typeof p> => p !== null && p.markdown.length > 150,
@@ -454,13 +463,19 @@ export async function runTopContenders(
     }))
     .sort((a, b) => payScore(b.rows[0].pay) - payScore(a.rows[0].pay));
 
-  const search: RoleSearch = { role: role ? `Top contenders: ${role}` : "Top contenders", area: areaText(area), companies };
+  const search: RoleSearch = {
+    role: role ? `Top contenders: ${role}` : "Top contenders",
+    area: areaText(area),
+    scanned: pool.length,
+    companies,
+  };
   return {
     search,
     forModel: JSON.stringify({
       note: "The app already shows these as a table grouped by employer, ranked by highest stated pay. Do not repeat the table.",
       area: areaText(area),
       ranking: "highest stated pay first; postings that hide pay rank last",
+      scope: `ranked from ${pool.length} postings found by web search in this area; this is not a complete list of every job in the area`,
       results: companies.map((c) => ({ employer: c.company, postings: c.rows })),
     }),
   };

@@ -28,6 +28,7 @@ export type CompanyResult = {
 export type RoleSearch = {
   role: string;
   area?: string; // e.g. "within 25 mi of Yukon, OK"
+  scanned?: number; // how many postings were considered (area-wide search)
   companies: CompanyResult[];
 };
 

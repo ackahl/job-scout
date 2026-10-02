@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 
-export type HomeBase = { location: string; radiusMiles: number | null };
+export type HomeBase = { location: string; radiusMiles: number | null; jobType?: string };
 
 const RADII: { label: string; value: number | null }[] = [
   { label: "10 mi", value: 10 },
@@ -75,6 +75,13 @@ export function HomeTurf({
           value={value.location}
           onChange={(e) => onChange({ ...value, location: e.target.value })}
           placeholder="City, ST (e.g. Yukon, OK)"
+          className="min-w-0 flex-1 basis-40 border border-rope bg-arena px-2.5 py-1.5 font-cond text-base text-chalk placeholder:text-chalk-dim/60 outline-none focus:border-electric"
+        />
+        <input
+          aria-label="Job type"
+          value={value.jobType ?? ""}
+          onChange={(e) => onChange({ ...value, jobType: e.target.value })}
+          placeholder="Job type (e.g. HR, accounting)"
           className="min-w-0 flex-1 basis-40 border border-rope bg-arena px-2.5 py-1.5 font-cond text-base text-chalk placeholder:text-chalk-dim/60 outline-none focus:border-electric"
         />
         <select

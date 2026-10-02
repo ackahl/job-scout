@@ -25,6 +25,7 @@ export function CaseFile({ search }: { search: RoleSearch }) {
           {search.area && <span className="ml-2 font-cond text-base normal-case tracking-normal text-chalk-dim">{search.area}</span>}
         </h2>
         <span className="font-cond text-sm font-bold uppercase tracking-widest text-chalk-dim">
+          {search.scanned !== undefined && <>Highest-paying of {search.scanned} postings scanned &middot; </>}
           {total} title shot{total === 1 ? "" : "s"} &middot; {search.companies.length} opponent
           {search.companies.length === 1 ? "" : "s"}
         </span>

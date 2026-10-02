@@ -33,6 +33,7 @@ const BodySchema = z.object({
     .object({ location: z.string().max(120), radiusMiles: z.number().int().min(1).max(500).nullable() })
     .nullable()
     .optional(),
+  jobType: z.string().max(120).nullable().optional(),
 });
 
 const UpdateInput = z.object({
@@ -99,7 +100,7 @@ export async function POST(request: Request) {
             response = await client.messages.create({
               model,
               max_tokens: 1500,
-              system: systemPrompt(employers.map((e) => e.name), body.homeBase ?? null),
+              system: systemPrompt(employers.map((e) => e.name), body.homeBase ?? null, body.jobType ?? null),
               tools: TOOL_DEFINITIONS,
               messages,
             });
