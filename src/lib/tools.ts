@@ -3,7 +3,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { companyTokens, hostOf, isAtsHost, isBlockedHost, listingUrlFor, looksLikePosting, pickBoard, scoreBoardCandidate } from "./board";
 import { chooseBoard, extractRows, selectPostings } from "./extract";
-import { firecrawlScrape, markdownLinks, tavilySearch, type TavilyResult } from "./search";
+import { firecrawlScrape, markdownLinks, tavilySearch, type ScrapedPage, type TavilyResult } from "./search";
 import type { CompanyResult, Employer, RoleSearch } from "./types";
 
 export const MAX_EMPLOYERS = 6;
@@ -80,6 +80,20 @@ function postingLinks(markdown: string, boardUrl: string | null) {
 
 const JOB_SEARCH_LINK = /search (all )?jobs|job search|view (all )?(open )?(jobs|positions|openings|roles)|see (all )?(open )?(jobs|positions|openings|roles)|open positions|current openings|explore (jobs|roles|opportunities)|find (a )?job/i;
 
+// If a careers page has no job links, follow its "Search Jobs" link (or a /jobs page on the same site) once.
+const LISTING_PATH = /\/(jobs|job-search|search-jobs|search|openings|careers\/search|en\/jobs)\/?$/i;
+async function followToListing(page: ScrapedPage): Promise<ScrapedPage> {
+  if (postingLinks(page.markdown, page.finalUrl).length >= 2) return page;
+  const host = hostOf(page.finalUrl);
+  const links = markdownLinks(page.markdown).filter((l) => !isBlockedHost(hostOf(l.url)));
+  const next =
+    links.find((l) => JOB_SEARCH_LINK.test(l.text)) ??
+    links.find((l) => hostOf(l.url) === host && LISTING_PATH.test(new URL(l.url).pathname));
+  if (!next || next.url.split("#")[0] === page.finalUrl.split("#")[0]) return page;
+  const listing = await firecrawlScrape(next.url, { waitForMs: 2500, mainContentOnly: false });
+  return listing && postingLinks(listing.markdown, listing.finalUrl).length >= 2 ? listing : page;
+}
+
 // ---------- Tool 1 ----------
 
 async function findBoard(name: string): Promise<Employer> {
@@ -123,16 +137,8 @@ async function findBoard(name: string): Promise<Employer> {
   let page = await firecrawlScrape(boardUrl, { waitForMs: 2500, mainContentOnly: false });
   if (page) {
     boardUrl = page.finalUrl;
-    if (postingLinks(page.markdown, boardUrl).length < 2) {
-      const next = markdownLinks(page.markdown).find((l) => JOB_SEARCH_LINK.test(l.text) && !isBlockedHost(hostOf(l.url)));
-      if (next) {
-        const listing = await firecrawlScrape(next.url, { waitForMs: 2500, mainContentOnly: false });
-        if (listing && postingLinks(listing.markdown, listing.finalUrl).length >= 2) {
-          page = listing;
-          boardUrl = listing.finalUrl;
-        }
-      }
-    }
+    page = await followToListing(page);
+    boardUrl = page.finalUrl;
     for (const l of postingLinks(page.markdown, boardUrl).slice(0, 5)) hosts.push(hostOf(l.url));
   }
   hosts.push(hostOf(boardUrl));
@@ -211,7 +217,8 @@ async function candidatePostings(employer: Employer, role: string): Promise<Cand
     ? tavilySearch(role ? `${role} ${employer.name}` : `${employer.name} job opening apply`, { includeDomains: employer.boardDomains, maxResults: 10 }).catch(() => [])
     : Promise.resolve([] as TavilyResult[]);
 
-  const [listing, site] = await Promise.all([listingTask, siteTask]);
+  const [landing, site] = await Promise.all([listingTask, siteTask]);
+  const listing = landing ? await followToListing(landing) : null;
   if (listing) for (const l of postingLinks(listing.markdown, employer.boardUrl)) add(l);
   for (const r of site) {
     if (!isBlockedHost(hostOf(r.url)) && looksLikePosting(r.url, employer.boardUrl)) add({ text: r.title, url: r.url });
