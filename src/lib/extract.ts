@@ -18,6 +18,7 @@ const ExtractionSchema = z.object({
         .describe("True only if the page describes one specific job opening, not a list or a generic careers page"),
       matches_role: z.boolean().describe("True if the job is a reasonable match for the role the user asked about"),
       employer_matches: z.boolean().describe("True if the employer on the page is the expected company (or its subsidiary)"),
+      employer: z.string().describe("Employer name as stated on the page"),
       title: z.string().describe("Job title exactly as written on the page"),
       location: z
         .string()
@@ -68,7 +69,7 @@ export async function extractRows(company: string, role: string, pages: ScrapedP
     messages: [
       {
         role: "user",
-        content: `Expected employer: ${company}\nRole the user is looking for: ${role || "any role (every real job posting counts as a match)"}\nLocation filter: ${area?.radiusMiles ? areaText(area) + " (remote jobs count)" : "none"}\n\n${corpus}`,
+        content: `Expected employer: ${company || "any employer (set employer_matches true for any real employer)"}\nRole the user is looking for: ${role || "any role (every real job posting counts as a match)"}\nLocation filter: ${area?.radiusMiles ? areaText(area) + " (remote jobs count)" : "none"}\n\n${corpus}`,
       },
     ],
     output_config: { format: zodOutputFormat(ExtractionSchema) },
@@ -82,7 +83,7 @@ export async function extractRows(company: string, role: string, pages: ScrapedP
   for (const p of parsed.postings) {
     const page = pages[p.index];
     if (!page || seen.has(page.url)) continue;
-    if (!p.is_single_job_posting || (role && !p.matches_role) || !p.employer_matches) continue;
+    if (!p.is_single_job_posting || (role && !p.matches_role) || (company && !p.employer_matches)) continue;
     if (area?.radiusMiles && !p.within_area) continue;
     seen.add(page.url);
     rows.push({
@@ -91,6 +92,7 @@ export async function extractRows(company: string, role: string, pages: ScrapedP
       pay: p.pay.trim() || "Not listed",
       url: page.url, // always the URL we actually scraped, never a model-written link
       status: page.statusCode >= 400 ? "closed" : p.status,
+      employer: p.employer.trim() || company,
     });
   }
   return rows;

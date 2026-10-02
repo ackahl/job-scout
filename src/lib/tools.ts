@@ -71,6 +71,22 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "find_top_contenders",
+    description:
+      "Scout the best job openings in the challenger's area across ALL employers (not just the saved companies), ranked by stated pay. " +
+      "Call this when the challenger asks for top contenders, the best jobs near them, or what's hiring in their area. " +
+      "Requires a location; use the challenger's home turf unless they name another place. If no location is known, ask for one instead of calling.",
+    input_schema: {
+      type: "object",
+      properties: {
+        location: { type: "string", description: "City and state, e.g. 'Yukon, OK'." },
+        radius_miles: { type: "number", description: "Search radius in miles. Default 25." },
+        role: { type: "string", description: "Optional job type to focus on. Omit for the best jobs of any kind." },
+      },
+      required: ["location"],
+    },
+  },
 ];
 
 type Status = (text: string) => void;
@@ -360,6 +376,92 @@ export async function runFindOpenRoles(
         ...(c.fallback ? { no_match_for_role: true, showing: "other current openings at this company" } : {}),
         ...(c.note ? { note: c.note } : {}),
       })),
+    }),
+  };
+}
+
+
+// ---------- Tool 3: area-wide "top contenders" ----------
+
+const ATS_SEARCH_DOMAINS = [
+  "myworkdayjobs.com", "myworkdaysite.com", "greenhouse.io", "lever.co", "ashbyhq.com", "icims.com",
+  "paycomonline.net", "paycomonline.com", "smartrecruiters.com", "jobvite.com", "workable.com",
+  "bamboohr.com", "paylocity.com", "ultipro.com", "applytojob.com",
+];
+
+// Highest annual figure stated in a pay string; hourly rates are annualized at 2,080 hours. 0 if no pay stated.
+export function payScore(pay: string): number {
+  if (!pay || /not listed/i.test(pay)) return 0;
+  const hourly = /hour|hr\b|\/hr|per hr/i.test(pay);
+  const nums = [...pay.matchAll(/\$\s?([\d,]+(?:\.\d+)?)\s*(k)?/gi)].map((m) => {
+    const n = parseFloat(m[1].replace(/,/g, ""));
+    return m[2] ? n * 1000 : n;
+  });
+  if (nums.length === 0) return 0;
+  const top = Math.max(...nums);
+  return hourly || top < 300 ? top * 2080 : top;
+}
+
+export async function runTopContenders(
+  input: { location: string; radius_miles?: number; role?: string },
+  status: Status,
+): Promise<{ search: RoleSearch | null; forModel: string }> {
+  const location = input.location?.trim();
+  if (!location) {
+    return { search: null, forModel: JSON.stringify({ error: "No location given. Ask the challenger where to search." }) };
+  }
+  const area: Area = { location, radiusMiles: input.radius_miles && input.radius_miles > 0 ? Math.round(input.radius_miles) : 25 };
+  const role = input.role?.trim() ?? "";
+  const what = role || "jobs";
+  status(`Scouting every arena ${areaText(area)} for the top contenders...`);
+
+  const [open, ats] = await Promise.all([
+    tavilySearch(`${what} hiring ${location} salary apply`, { maxResults: 15, excludeDomains: BLOCKED_FOR_SEARCH }).catch(() => []),
+    tavilySearch(`${what} ${location}`, { maxResults: 15, includeDomains: ATS_SEARCH_DOMAINS }).catch(() => []),
+  ]);
+  const seen = new Set<string>();
+  const candidates: Candidate[] = [];
+  for (const r of [...ats, ...open]) {
+    const host = hostOf(r.url);
+    const key = r.url.split("?")[0];
+    if (!host || isBlockedHost(host) || seen.has(key) || !looksLikePosting(r.url, null)) continue;
+    seen.add(key);
+    candidates.push({ text: `${r.title} | ${r.content.replace(/\s+/g, " ").slice(0, 140)}`, url: r.url });
+  }
+  if (candidates.length === 0) {
+    return { search: { role: role || "Top contenders", area: areaText(area), companies: [] }, forModel: JSON.stringify({ result: "No postings found in this area." }) };
+  }
+
+  const picks = await selectPostings("any employer", role, candidates, 8, area);
+  const chosen = picks.map((i) => candidates[i]);
+  status(`Tag partner Jax "The Jackhammer" Offerletter is tearing through ${chosen.length} postings ${areaText(area)}...`);
+  const pages = (await Promise.all(chosen.map((c) => firecrawlScrape(c.url, { waitForMs: 1500 })))).filter(
+    (p): p is NonNullable<typeof p> => p !== null && p.markdown.length > 150,
+  );
+  const rows = (await extractRows("", role, pages, area)).filter((r) => r.status !== "closed");
+
+  // Group by employer; rank employers by their best stated pay, postings with pay first.
+  const groups = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const k = r.employer || "Unknown employer";
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  const companies: CompanyResult[] = [...groups.entries()]
+    .map(([company, rs]) => ({
+      company,
+      boardUrl: null,
+      rows: rs.sort((a, b) => payScore(b.pay) - payScore(a.pay)),
+    }))
+    .sort((a, b) => payScore(b.rows[0].pay) - payScore(a.rows[0].pay));
+
+  const search: RoleSearch = { role: role ? `Top contenders: ${role}` : "Top contenders", area: areaText(area), companies };
+  return {
+    search,
+    forModel: JSON.stringify({
+      note: "The app already shows these as a table grouped by employer, ranked by highest stated pay. Do not repeat the table.",
+      area: areaText(area),
+      ranking: "highest stated pay first; postings that hide pay rank last",
+      results: companies.map((c) => ({ employer: c.company, postings: c.rows })),
     }),
   };
 }

@@ -14,7 +14,17 @@ const RADII: { label: string; value: number | null }[] = [
   { label: "Anywhere", value: null },
 ];
 
-export function HomeTurf({ value, onChange }: { value: HomeBase; onChange: (v: HomeBase) => void }) {
+export function HomeTurf({
+  value,
+  onChange,
+  onTopContenders,
+  busy,
+}: {
+  value: HomeBase;
+  onChange: (v: HomeBase) => void;
+  onTopContenders: () => void;
+  busy: boolean;
+}) {
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState("");
 
@@ -86,6 +96,14 @@ export function HomeTurf({ value, onChange }: { value: HomeBase; onChange: (v: H
           className="electric-box shrink-0 bg-arena px-2.5 py-1.5 font-cond text-sm font-bold uppercase tracking-wider text-electric transition hover:bg-electric hover:text-arena disabled:opacity-50"
         >
           {locating ? "Locating..." : "Use my location"}
+        </button>
+        <button
+          type="button"
+          onClick={onTopContenders}
+          disabled={busy}
+          className="shrink-0 -skew-x-12 bg-gold px-3 py-1.5 font-poster text-sm uppercase tracking-wider text-arena transition hover:bg-neon disabled:opacity-40"
+        >
+          <span className="inline-block skew-x-12">Top contenders</span>
         </button>
         {error && <p className="w-full font-cond text-sm text-over">{error}</p>}
       </div>

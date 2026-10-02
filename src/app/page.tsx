@@ -16,7 +16,7 @@ type Item =
   | { kind: "error"; text: string };
 
 const SUGGESTIONS = [
-  "Call out Paycom, Devon Energy and Love's Travel Stops",
+  "Show me the top contenders near me",
   "Find me HR generalist jobs",
   "How should I answer 'tell me about yourself'?",
 ];
@@ -206,7 +206,7 @@ export default function Home() {
       </header>
 
       <SuspectBoard employers={employers} />
-      <HomeTurf value={turf} onChange={updateTurf} />
+      <HomeTurf value={turf} onChange={updateTurf} onTopContenders={() => send("Show me the top contenders near me")} busy={busy || !sessionId} />
 
       <main className="mx-auto w-full max-w-4xl flex-1 space-y-5 px-4 py-6">
         <MaxPromo text={OPENING_LINE} />

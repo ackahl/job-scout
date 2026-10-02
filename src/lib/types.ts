@@ -12,6 +12,7 @@ export type RoleRow = {
   pay: string; // "Not listed" when the posting doesn't say
   url: string;
   status: "open" | "closed" | "unverified";
+  employer?: string; // employer named on the posting (used by the area-wide search)
 };
 
 export type Area = { location: string; radiusMiles: number | null }; // radiusMiles null = anywhere

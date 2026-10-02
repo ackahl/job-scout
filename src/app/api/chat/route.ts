@@ -6,7 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { systemPrompt } from "@/lib/persona";
 import { loadEmployers, saveEmployers, saveMessages, saveSearch } from "@/lib/store";
-import { TOOL_DEFINITIONS, runFindOpenRoles, runUpdateEmployerList } from "@/lib/tools";
+import { TOOL_DEFINITIONS, runFindOpenRoles, runTopContenders, runUpdateEmployerList } from "@/lib/tools";
 import type { Employer, StreamEvent } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -38,6 +38,11 @@ const BodySchema = z.object({
 const UpdateInput = z.object({
   action: z.enum(["add", "remove", "replace"]),
   companies: z.array(z.string().max(120)).min(1).max(10),
+});
+const TopInput = z.object({
+  location: z.string().max(120),
+  radius_miles: z.number().min(0).max(500).optional(),
+  role: z.string().max(200).optional(),
 });
 const FindInput = z.object({
   role: z.string().max(200).optional(),
@@ -153,6 +158,18 @@ export async function POST(request: Request) {
                       out.search.companies
                         .map((c) => `${c.company} ${c.rows.length ? c.rows.map((r) => `${r.title} (${r.pay}, ${r.status})`).join("; ") : "none"}`)
                         .join(" | "),
+                  );
+                }
+                content = out.forModel;
+              } else if (call.name === "find_top_contenders") {
+                const input = TopInput.parse(call.input);
+                const out = await runTopContenders(input, status);
+                if (out.search) {
+                  send({ type: "roles", search: out.search });
+                  await saveSearch(sessionId, out.search);
+                  notes.push(
+                    `Top contenders ${out.search.area ?? ""}: ` +
+                      out.search.companies.map((c) => `${c.company}: ${c.rows.map((r) => `${r.title} (${r.pay})`).join("; ")}`).join(" | "),
                   );
                 }
                 content = out.forModel;
