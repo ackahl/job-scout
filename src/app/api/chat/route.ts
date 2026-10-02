@@ -131,6 +131,11 @@ export async function POST(request: Request) {
               } else if (call.name === "find_open_roles") {
                 const input = FindInput.parse(call.input);
                 const out = await runFindOpenRoles(input, employers, status);
+                if (JSON.stringify(out.employers) !== JSON.stringify(employers)) {
+                  employers = out.employers;
+                  await saveEmployers(sessionId, employers);
+                  send({ type: "employers", employers });
+                }
                 if (out.search) {
                   send({ type: "roles", search: out.search });
                   await saveSearch(sessionId, out.search);

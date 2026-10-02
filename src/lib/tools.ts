@@ -1,13 +1,14 @@
 // The two custom tools. The tool descriptions are what the LLM reads to decide when to call them.
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { companyTokens, hostOf, isAtsHost, isBlockedHost, looksLikePosting, pickBoard } from "./board";
-import { extractRows } from "./extract";
-import { firecrawlScrape, tavilySearch, type TavilyResult } from "./search";
+import { companyTokens, hostOf, isAtsHost, isBlockedHost, listingUrlFor, looksLikePosting, pickBoard, scoreBoardCandidate } from "./board";
+import { chooseBoard, extractRows, selectPostings } from "./extract";
+import { firecrawlScrape, markdownLinks, tavilySearch, type TavilyResult } from "./search";
 import type { CompanyResult, Employer, RoleSearch } from "./types";
 
 export const MAX_EMPLOYERS = 6;
-const POSTINGS_PER_COMPANY = 5;
+const POSTINGS_PER_COMPANY = 4;
+const BLOCKED_FOR_SEARCH = ["linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com", "simplyhired.com", "monster.com", "careerbuilder.com", "theladders.com", "tealhq.com", "jobzmall.com", "lensa.com", "talent.com", "jooble.org", "builtin.com"];
 
 export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
@@ -64,12 +65,76 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
 
 type Status = (text: string) => void;
 
+const uniq = <T,>(xs: T[]) => [...new Set(xs)];
+
+// Posting links on a scraped listing page.
+function postingLinks(markdown: string, boardUrl: string | null) {
+  return markdownLinks(markdown).filter((l) => {
+    const host = hostOf(l.url);
+    if (/^(https?:\/\/|www\.)|\.(com|org|net)\b/i.test(l.text)) return false; // bare-URL links are footers, not jobs
+    return host && !isBlockedHost(host) && looksLikePosting(l.url, boardUrl);
+  });
+}
+
+const JOB_SEARCH_LINK = /search (all )?jobs|job search|view (all )?(open )?(jobs|positions|openings|roles)|see (all )?(open )?(jobs|positions|openings|roles)|open positions|current openings|explore (jobs|roles|opportunities)|find (a )?job/i;
+
 // ---------- Tool 1 ----------
 
 async function findBoard(name: string): Promise<Employer> {
-  const results = await tavilySearch(`${name} careers job openings official site`, { maxResults: 10 });
-  const { boardUrl, boardDomains } = pickBoard(results, name);
-  return { name, boardUrl, boardDomains };
+  const tokens = companyTokens(name);
+  // Two searches: one for the careers site, one that tends to surface the applicant tracking system.
+  const [a, b] = await Promise.all([
+    tavilySearch(`${name} careers job openings official site`, { maxResults: 10 }),
+    tavilySearch(`${name} jobs apply now`, { maxResults: 8, excludeDomains: BLOCKED_FOR_SEARCH }).catch(() => []),
+  ]);
+  const seen = new Set<string>();
+  const candidates = [...a, ...b]
+    .filter((r) => {
+      const host = hostOf(r.url);
+      if (!host || isBlockedHost(host) || seen.has(r.url)) return false;
+      seen.add(r.url);
+      return true;
+    })
+    .sort((x, y) => scoreBoardCandidate(y, tokens) - scoreBoardCandidate(x, tokens))
+    .slice(0, 12);
+
+  // Let a small model make the call (it can tell "Paycom" from "Paycom Center"); fall back to the heuristic.
+  let boardUrl: string | null = null;
+  let hosts: string[] = [];
+  try {
+    const choice = await chooseBoard(name, candidates);
+    if (choice && choice.index >= 0 && candidates[choice.index]) {
+      boardUrl = candidates[choice.index].url;
+      hosts = choice.jobHosts;
+    }
+  } catch (error) {
+    console.error("[findBoard] chooseBoard", name, error);
+  }
+  if (!boardUrl) {
+    const h = pickBoard(candidates, name);
+    boardUrl = h.boardUrl;
+    hosts = h.boardDomains;
+  }
+  if (!boardUrl) return { name, boardUrl: null, boardDomains: [] };
+
+  // Open the board. Follow redirects, and if it's a landing page, follow its "search jobs" link once.
+  let page = await firecrawlScrape(boardUrl, { waitForMs: 2500, mainContentOnly: false });
+  if (page) {
+    boardUrl = page.finalUrl;
+    if (postingLinks(page.markdown, boardUrl).length < 2) {
+      const next = markdownLinks(page.markdown).find((l) => JOB_SEARCH_LINK.test(l.text) && !isBlockedHost(hostOf(l.url)));
+      if (next) {
+        const listing = await firecrawlScrape(next.url, { waitForMs: 2500, mainContentOnly: false });
+        if (listing && postingLinks(listing.markdown, listing.finalUrl).length >= 2) {
+          page = listing;
+          boardUrl = listing.finalUrl;
+        }
+      }
+    }
+    for (const l of postingLinks(page.markdown, boardUrl).slice(0, 5)) hosts.push(hostOf(l.url));
+  }
+  hosts.push(hostOf(boardUrl));
+  return { name, boardUrl, boardDomains: uniq(hosts.filter(Boolean)).slice(0, 5) };
 }
 
 export async function runUpdateEmployerList(
@@ -83,7 +148,7 @@ export async function runUpdateEmployerList(
   if (input.action === "remove") {
     const drop = new Set(names.map(norm));
     const employers = current.filter((e) => !drop.has(norm(e.name)));
-    return { employers, forModel: JSON.stringify({ saved_companies: employers, removed: names }) };
+    return { employers, forModel: JSON.stringify({ saved_companies: employers.map((e) => e.name), removed: names }) };
   }
 
   const base = input.action === "replace" ? [] : current;
@@ -93,7 +158,7 @@ export async function runUpdateEmployerList(
   const accepted = toAdd.slice(0, room);
   const rejected = toAdd.slice(room);
 
-  status(`Scouting the arena for ${accepted.join(", ") || "nobody new"}... finding their job boards...`);
+  if (accepted.length) status(`Scouting the arena for ${accepted.join(", ")}... finding their job boards...`);
   const found = await Promise.all(
     accepted.map(async (name) => {
       try {
@@ -120,61 +185,85 @@ export async function runUpdateEmployerList(
 
 // ---------- Tool 2 ----------
 
-async function candidatePostings(employer: Employer, role: string): Promise<TavilyResult[]> {
+type Candidate = { text: string; url: string };
+
+async function candidatePostings(employer: Employer, role: string): Promise<Candidate[]> {
   const tokens = companyTokens(employer.name);
-  const keep = (r: TavilyResult) => {
-    const host = hostOf(r.url);
-    return !!host && !isBlockedHost(host) && looksLikePosting(r.url, employer.boardUrl);
+  const t = tokens[0] ?? "~";
+  const out: Candidate[] = [];
+  const seen = new Set<string>();
+  const add = (c: Candidate) => {
+    const key = c.url.split("?")[0];
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(c);
   };
 
-  let results: TavilyResult[] = [];
-  if (employer.boardDomains.length > 0) {
-    results = (
-      await tavilySearch(`${role} job ${employer.name}`, { includeDomains: employer.boardDomains, maxResults: 10 })
-    ).filter(keep);
+  // 1) Read the board's own listing (with a keyword search where the board supports one).
+  const listingTask = employer.boardUrl
+    ? firecrawlScrape(listingUrlFor(employer.boardUrl, role), { waitForMs: 2500, mainContentOnly: false })
+    : Promise.resolve(null);
+
+  // 2) Search the board's domains for this role.
+  const siteTask = employer.boardDomains.length
+    ? tavilySearch(`${role} ${employer.name}`, { includeDomains: employer.boardDomains, maxResults: 10 }).catch(() => [])
+    : Promise.resolve([] as TavilyResult[]);
+
+  const [listing, site] = await Promise.all([listingTask, siteTask]);
+  if (listing) for (const l of postingLinks(listing.markdown, employer.boardUrl)) add(l);
+  for (const r of site) {
+    if (!isBlockedHost(hostOf(r.url)) && looksLikePosting(r.url, employer.boardUrl)) add({ text: r.title, url: r.url });
   }
 
-  // Fall back to an open web search, keeping only the company's own site or an ATS page that names the company.
-  if (results.length < 2) {
-    const open = await tavilySearch(`"${employer.name}" ${role} job opening apply`, { maxResults: 10 });
-    const t = tokens[0] ?? "~";
-    const extra = open.filter((r) => {
-      if (!keep(r)) return false;
+  // 3) Thin results: open web search, keeping only the company's own site or an ATS page naming the company.
+  if (out.length < 3) {
+    const open = await tavilySearch(`"${employer.name}" ${role} job`, {
+      maxResults: 10,
+      excludeDomains: BLOCKED_FOR_SEARCH,
+    }).catch(() => []);
+    for (const r of open) {
       const host = hostOf(r.url);
+      if (!host || isBlockedHost(host) || !looksLikePosting(r.url, employer.boardUrl)) continue;
       const flat = (r.url + r.title).toLowerCase().replace(/[^a-z0-9]/g, "");
-      return host.replace(/[^a-z0-9]/g, "").includes(t) || (isAtsHost(host) && flat.includes(t));
-    });
-    const seen = new Set(results.map((r) => r.url));
-    results = [...results, ...extra.filter((r) => !seen.has(r.url))];
+      if (host.replace(/[^a-z0-9]/g, "").includes(t) || (isAtsHost(host) && flat.includes(t))) add({ text: r.title, url: r.url });
+    }
   }
-
-  return results.sort((a, b) => b.score - a.score).slice(0, POSTINGS_PER_COMPANY);
+  return out.slice(0, 80);
 }
 
-async function searchCompany(employer: Employer, role: string, status: Status): Promise<CompanyResult> {
+async function searchCompany(
+  employer: Employer,
+  role: string,
+  status: Status,
+): Promise<{ result: CompanyResult; learnedHosts: string[] }> {
   const base = { company: employer.name, boardUrl: employer.boardUrl };
   try {
     const candidates = await candidatePostings(employer, role);
     if (candidates.length === 0) {
-      return { ...base, rows: [], note: "No matching postings found on this company's job board." };
+      return { result: { ...base, rows: [], note: "Couldn't find any postings on this company's job board." }, learnedHosts: [] };
     }
-    status(`Tag partner Jax "The Jackhammer" Offerletter is tearing through ${candidates.length} posting${candidates.length > 1 ? "s" : ""} at ${employer.name}...`);
-    const pages = (await Promise.all(candidates.map((c) => firecrawlScrape(c.url)))).filter(
-      (p): p is NonNullable<typeof p> => p !== null && p.markdown.length > 200,
+    const picks = await selectPostings(employer.name, role, candidates, POSTINGS_PER_COMPANY);
+    if (picks.length === 0) {
+      return { result: { ...base, rows: [], note: `Checked ${candidates.length} postings; none match this role.` }, learnedHosts: [] };
+    }
+    const chosen = picks.map((i) => candidates[i]);
+    status(`Tag partner Jax "The Jackhammer" Offerletter is tearing through ${chosen.length} posting${chosen.length > 1 ? "s" : ""} at ${employer.name}...`);
+    const pages = (await Promise.all(chosen.map((c) => firecrawlScrape(c.url, { waitForMs: 1500 })))).filter(
+      (p): p is NonNullable<typeof p> => p !== null && p.markdown.length > 150,
     );
     if (pages.length === 0) {
-      return { ...base, rows: [], note: "Found postings but none could be read." };
+      return { result: { ...base, rows: [], note: "Found matching postings but couldn't open them." }, learnedHosts: [] };
     }
     const rows = await extractRows(employer.name, role, pages);
-    // Open postings first, then unverified, then closed.
     const order = { open: 0, unverified: 1, closed: 2 } as const;
     rows.sort((a, b) => order[a.status] - order[b.status]);
-    return rows.length > 0
-      ? { ...base, rows }
-      : { ...base, rows: [], note: "Postings found, but none matched this role." };
+    return {
+      result: rows.length > 0 ? { ...base, rows } : { ...base, rows: [], note: "Postings found, but none matched this role." },
+      learnedHosts: rows.map((r) => hostOf(r.url)).filter(Boolean),
+    };
   } catch (error) {
     console.error("[find_open_roles]", employer.name, error);
-    return { ...base, rows: [], note: "Search failed for this company. Try again." };
+    return { result: { ...base, rows: [], note: "Search failed for this company. Try again." }, learnedHosts: [] };
   }
 }
 
@@ -182,10 +271,11 @@ export async function runFindOpenRoles(
   input: { role: string; companies?: string[] },
   employers: Employer[],
   status: Status,
-): Promise<{ search: RoleSearch | null; forModel: string }> {
+): Promise<{ search: RoleSearch | null; employers: Employer[]; forModel: string }> {
   if (employers.length === 0) {
     return {
       search: null,
+      employers,
       forModel: JSON.stringify({ error: "No companies saved yet. Ask the user which companies to watch." }),
     };
   }
@@ -194,11 +284,20 @@ export async function runFindOpenRoles(
   const list = targets.length > 0 ? targets : employers;
 
   status(`Storming the job boards of ${list.map((e) => e.name).join(", ")} for "${input.role}"...`);
-  const companies = await Promise.all(list.map((e) => searchCompany(e, input.role, status)));
+  const outcomes = await Promise.all(list.map((e) => searchCompany(e, input.role, status)));
+  const companies = outcomes.map((o) => o.result);
   const search: RoleSearch = { role: input.role, companies };
+
+  // Remember any new job-posting hosts we confirmed, so the next search looks there directly.
+  const learned = new Map(list.map((e, i) => [e.name, outcomes[i].learnedHosts]));
+  const updated = employers.map((e) => {
+    const extra = learned.get(e.name) ?? [];
+    return extra.length ? { ...e, boardDomains: uniq([...e.boardDomains, ...extra]).slice(0, 6) } : e;
+  });
 
   return {
     search,
+    employers: updated,
     forModel: JSON.stringify({
       note: "The app already shows these results to the user as a table grouped by company. Do not repeat the table.",
       role: input.role,

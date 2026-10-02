@@ -17,6 +17,7 @@ export const ATS_HOSTS = [
   "bamboohr.com",
   "paylocity.com",
   "paycomonline.net",
+  "paycomonline.com",
   "ultipro.com",
   "ukg.net",
   "oraclecloud.com",
@@ -140,10 +141,26 @@ export function looksLikePosting(url: string, boardUrl: string | null): boolean 
   if (boardUrl && url.replace(/\/$/, "") === boardUrl.replace(/\/$/, "")) return false;
   const path = u.pathname.toLowerCase();
   const segs = path.split("/").filter(Boolean);
-  if (/(^|\/)(search|search-results|results|jobs|careers|openings|positions|departments|teams|locations|benefits|culture)\/?$/.test(path)) return false;
+  if (/(^|\/)(search|search-results|results|jobs|careers|openings|positions|departments|teams|locations|benefits|culture|career-page|job-search|search-jobs|job-map|job-categories)\/?$/.test(path)) return false;
+  if (/\/(job-categories|blog|news|press|about|resources|software|privacy|terms)(\/|$)/.test(path)) return false;
   if (u.searchParams.has("gh_jid") || u.searchParams.has("jobId") || u.searchParams.has("job_id")) return true;
   if (/\/(job|jobs|details|position|positions|posting|requisition|req|opening|career|careers|vacancy)\/[^/]+/.test(path)) return true;
   if (/\d{4,}/.test(path)) return true; // most postings carry a numeric or long ID
   if (/[0-9a-f]{8}-[0-9a-f]{4}-/.test(path)) return true; // Lever / Ashby UUIDs
   return segs.length >= 3;
+}
+
+// Some applicant tracking systems accept a keyword in the listing URL. Use it when we know how.
+export function listingUrlFor(boardUrl: string, role: string): string {
+  try {
+    const u = new URL(boardUrl);
+    const host = u.hostname.toLowerCase();
+    if (host.endsWith("myworkdayjobs.com") || host.endsWith("myworkdaysite.com")) {
+      u.searchParams.set("q", role);
+      return u.toString();
+    }
+    return boardUrl;
+  } catch {
+    return boardUrl;
+  }
 }
