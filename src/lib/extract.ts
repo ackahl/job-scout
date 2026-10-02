@@ -62,7 +62,7 @@ export async function extractRows(company: string, role: string, pages: ScrapedP
     messages: [
       {
         role: "user",
-        content: `Expected employer: ${company}\nRole the user is looking for: ${role}\n\n${corpus}`,
+        content: `Expected employer: ${company}\nRole the user is looking for: ${role || "any role (every real job posting counts as a match)"}\n\n${corpus}`,
       },
     ],
     output_config: { format: zodOutputFormat(ExtractionSchema) },
@@ -76,7 +76,7 @@ export async function extractRows(company: string, role: string, pages: ScrapedP
   for (const p of parsed.postings) {
     const page = pages[p.index];
     if (!page || seen.has(page.url)) continue;
-    if (!p.is_single_job_posting || !p.matches_role || !p.employer_matches) continue;
+    if (!p.is_single_job_posting || (role && !p.matches_role) || !p.employer_matches) continue;
     seen.add(page.url);
     rows.push({
       title: p.title.trim() || page.title || "Untitled posting",

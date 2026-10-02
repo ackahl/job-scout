@@ -155,7 +155,7 @@ export function listingUrlFor(boardUrl: string, role: string): string {
   try {
     const u = new URL(boardUrl);
     const host = u.hostname.toLowerCase();
-    if (host.endsWith("myworkdayjobs.com") || host.endsWith("myworkdaysite.com")) {
+    if (role && (host.endsWith("myworkdayjobs.com") || host.endsWith("myworkdaysite.com"))) {
       u.searchParams.set("q", role);
       return u.toString();
     }

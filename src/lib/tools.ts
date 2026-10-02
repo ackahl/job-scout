@@ -40,9 +40,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "find_open_roles",
     description:
-      "Search the saved companies' job boards for open postings matching a type of job, and return each posting's " +
+      "Search the saved companies' job boards for open postings, and return each posting's " +
       "title, location, pay, status and link. Call this when the user asks what jobs, openings, roles or positions " +
-      "are available (e.g. 'any data analyst jobs?', 'find me HR manager roles'). The saved employer list must not be " +
+      "are available (e.g. 'any data analyst jobs?', 'find me HR manager roles', 'what's open at Devon?'). " +
+      "Pass a role to search for one kind of job; omit role to get each company's newest openings across all roles. "The saved employer list must not be " +
       "empty; if the user names new companies in the same message, call update_employer_list first. " +
       "Do not call this for general career advice, interview prep, resume questions or salary negotiation.",
     input_schema: {
@@ -50,7 +51,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       properties: {
         role: {
           type: "string",
-          description: "The job type to search for, in plain words, e.g. 'data analyst' or 'HR business partner'.",
+          description: "Optional. The job type to search for, in plain words, e.g. 'data analyst'. Omit to list the newest openings of any kind.",
         },
         companies: {
           type: "array",
@@ -58,7 +59,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           description: "Optional: limit the search to these saved companies. Omit to search every saved company.",
         },
       },
-      required: ["role"],
+      required: [],
     },
   },
 ];
@@ -206,7 +207,7 @@ async function candidatePostings(employer: Employer, role: string): Promise<Cand
 
   // 2) Search the board's domains for this role.
   const siteTask = employer.boardDomains.length
-    ? tavilySearch(`${role} ${employer.name}`, { includeDomains: employer.boardDomains, maxResults: 10 }).catch(() => [])
+    ? tavilySearch(role ? `${role} ${employer.name}` : `${employer.name} job opening apply`, { includeDomains: employer.boardDomains, maxResults: 10 }).catch(() => [])
     : Promise.resolve([] as TavilyResult[]);
 
   const [listing, site] = await Promise.all([listingTask, siteTask]);
@@ -217,7 +218,7 @@ async function candidatePostings(employer: Employer, role: string): Promise<Cand
 
   // 3) Thin results: open web search, keeping only the company's own site or an ATS page naming the company.
   if (out.length < 3) {
-    const open = await tavilySearch(`"${employer.name}" ${role} job`, {
+    const open = await tavilySearch(`"${employer.name}" ${role || "job opening"} job`, {
       maxResults: 10,
       excludeDomains: BLOCKED_FOR_SEARCH,
     }).catch(() => []);
@@ -242,7 +243,10 @@ async function searchCompany(
     if (candidates.length === 0) {
       return { result: { ...base, rows: [], note: "Couldn't find any postings on this company's job board." }, learnedHosts: [] };
     }
-    const picks = await selectPostings(employer.name, role, candidates, POSTINGS_PER_COMPANY);
+    // No role: take the board's newest postings as listed. With a role: let the model pick the matches.
+    const picks = role
+      ? await selectPostings(employer.name, role, candidates, POSTINGS_PER_COMPANY)
+      : candidates.slice(0, POSTINGS_PER_COMPANY + 1).map((_, i) => i);
     if (picks.length === 0) {
       return { result: { ...base, rows: [], note: `Checked ${candidates.length} postings; none match this role.` }, learnedHosts: [] };
     }
@@ -268,7 +272,7 @@ async function searchCompany(
 }
 
 export async function runFindOpenRoles(
-  input: { role: string; companies?: string[] },
+  input: { role?: string; companies?: string[] },
   employers: Employer[],
   status: Status,
 ): Promise<{ search: RoleSearch | null; employers: Employer[]; forModel: string }> {
@@ -283,10 +287,12 @@ export async function runFindOpenRoles(
   const targets = wanted?.length ? employers.filter((e) => wanted.includes(e.name.toLowerCase())) : employers;
   const list = targets.length > 0 ? targets : employers;
 
-  status(`Storming the job boards of ${list.map((e) => e.name).join(", ")} for "${input.role}"...`);
-  const outcomes = await Promise.all(list.map((e) => searchCompany(e, input.role, status)));
+  const role = input.role?.trim() ?? "";
+  const label = role || "All openings";
+  status(`Storming the job boards of ${list.map((e) => e.name).join(", ")} for ${role ? `"${role}"` : "every open title shot"}...`);
+  const outcomes = await Promise.all(list.map((e) => searchCompany(e, role, status)));
   const companies = outcomes.map((o) => o.result);
-  const search: RoleSearch = { role: input.role, companies };
+  const search: RoleSearch = { role: label, companies };
 
   // Remember any new job-posting hosts we confirmed, so the next search looks there directly.
   const learned = new Map(list.map((e, i) => [e.name, outcomes[i].learnedHosts]));
@@ -300,7 +306,7 @@ export async function runFindOpenRoles(
     employers: updated,
     forModel: JSON.stringify({
       note: "The app already shows these results to the user as a table grouped by company. Do not repeat the table.",
-      role: input.role,
+      role: label,
       results: companies.map((c) => ({
         company: c.company,
         job_board: c.boardUrl,

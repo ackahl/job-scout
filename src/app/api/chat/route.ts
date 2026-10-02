@@ -35,7 +35,7 @@ const UpdateInput = z.object({
   action: z.enum(["add", "remove", "replace"]),
   companies: z.array(z.string().max(120)).min(1).max(10),
 });
-const FindInput = z.object({ role: z.string().min(1).max(200), companies: z.array(z.string()).optional() });
+const FindInput = z.object({ role: z.string().max(200).optional(), companies: z.array(z.string()).optional() });
 
 function missingKeys() {
   return ["ANTHROPIC_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"].filter((k) => !process.env[k]);
