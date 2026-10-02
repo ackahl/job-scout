@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-poster: "Anton", Impact, "Arial Narrow", sans-serif;
+  --font-cond: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --color-arena: #07060a;
+  --color-canvas: #120f18;
+  --color-apron: #1c1726;
+  --color-rope: #2c2438;
+  --color-neon: #ff2e88;
+  --color-electric: #22d3ee;
+  --color-gold: #f5c542;
+  --color-gold-dark: #b8860b;
+  --color-chalk: #f4f1ea;
+  --color-chalk-dim: #b9b2c4;
+  --color-live: #39e27a;
+  --color-over: #ff4d4d;
+}
+
+html,
+body {
+  background: var(--color-arena);
+  color: var(--color-chalk);
+  font-family: var(--font-cond);
+}
+
+/* Spotlight on the ring plus a halftone poster texture. */
+.arena {
+  background-image:
+    radial-gradient(ellipse 70% 45% at 50% -5%, rgba(255, 46, 136, 0.22), transparent 70%),
+    radial-gradient(ellipse 50% 35% at 100% 10%, rgba(34, 211, 238, 0.12), transparent 70%),
+    radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1.2px);
+  background-size: auto, auto, 6px 6px;
+}
+
+/* Championship-belt gold lettering. */
+.gold-text {
+  background: linear-gradient(180deg, #fff3b0 0%, #f5c542 45%, #b8860b 55%, #ffe27a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 0 #5a1236) drop-shadow(0 0 14px rgba(255, 46, 136, 0.35));
+}
+
+.neon-box {
+  box-shadow:
+    0 0 0 1px rgba(255, 46, 136, 0.7),
+    0 0 18px rgba(255, 46, 136, 0.25),
+    inset 0 0 24px rgba(255, 46, 136, 0.06);
+}
+
+.electric-box {
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.65),
+    0 0 14px rgba(34, 211, 238, 0.2);
+}
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  font-family: var(--font-poster);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  transform: skewX(-12deg);
+  white-space: nowrap;
+}
+
+.pulse::after {
+  content: " ...";
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.max-text p + p {
+  margin-top: 0.65rem;
+}
+.max-text strong {
+  color: var(--color-gold);
+}
+.max-text a {
+  text-decoration: underline;
+  color: var(--color-electric);
+}
+.max-text ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+}
+.max-text ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse::after {
+    animation: none;
+  }
+}
