@@ -52,7 +52,10 @@ async function page(where: string, what: string, km: number, n: number) {
 }
 
 // Listings whose "salary" is really gross business revenue (truck owner-operators, lease-purchase).
-const NOT_A_SALARY = /owner[\s/-]*op|lease[\s-]*(purchase|operator)|independent contractor/i;
+const NOT_A_SALARY = /owner[\s/-]*op|\bo\/o\b|lease[\s-]*(purchase|operator)|independent contractor|\b1099\b/i;
+// Driving ads that quote truck revenue as pay: treat anything over this as not a salary.
+const DRIVING = /\bcdl\b|truck|driver|\botr\b|freight|haul/i;
+const DRIVING_PAY_CEILING = 200_000;
 
 // Common abbreviations users type in the job type box.
 function expandRole(role: string): string[] {
@@ -89,7 +92,7 @@ export async function adzunaTopJobs(
   let where = expandState(area.location);
   const terms = role ? expandRole(role) : [""];
   const fetchAll = (w: string) =>
-    Promise.all(terms.flatMap((t) => (t ? [1, 2] : [1]).map((n) => page(w, t, km, n).catch(() => ({ count: 0, results: [] as AdzunaJob[] })))));
+    Promise.all(terms.flatMap((t) => (t ? [1, 2, 3] : [1]).map((n) => page(w, t, km, n).catch(() => ({ count: 0, results: [] as AdzunaJob[] })))));
   let pages = await fetchAll(where);
   if (pages.every((p) => !p.count) && where !== area.location) {
     where = area.location;
@@ -110,8 +113,10 @@ export async function adzunaTopJobs(
     .flatMap((p) => p.results ?? [])
     .filter((j) => !NOT_A_SALARY.test(j.title ?? ""))
     .filter((j) => !titleRe || titleRe.test(j.title ?? ""))
+    .filter((j) => !(DRIVING.test(j.title ?? "") && Math.max(j.salary_min ?? 0, j.salary_max ?? 0) > DRIVING_PAY_CEILING))
     .filter((j) => {
-      const k = `${(j.title ?? "").toLowerCase()}|${j.location?.display_name ?? ""}|${j.salary_max ?? ""}`;
+      // Same title at the same employer = one opening, even if it's posted under several city names.
+      const k = `${(j.title ?? "").toLowerCase().replace(/\s+/g, " ").trim()}|${(j.company?.display_name ?? "").toLowerCase()}`;
       if (seenJob.has(k)) return false;
       seenJob.add(k);
       return true;
