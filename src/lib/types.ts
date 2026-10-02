@@ -14,6 +14,8 @@ export type RoleRow = {
   status: "open" | "closed" | "unverified";
 };
 
+export type Area = { location: string; radiusMiles: number | null }; // radiusMiles null = anywhere
+
 export type CompanyResult = {
   company: string;
   boardUrl: string | null;
@@ -24,6 +26,7 @@ export type CompanyResult = {
 
 export type RoleSearch = {
   role: string;
+  area?: string; // e.g. "within 25 mi of Yukon, OK"
   companies: CompanyResult[];
 };
 

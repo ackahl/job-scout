@@ -22,6 +22,7 @@ export function CaseFile({ search }: { search: RoleSearch }) {
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <h2 className="font-poster text-2xl uppercase tracking-wide text-chalk">
           Match card: <span className="text-electric">{search.role}</span>
+          {search.area && <span className="ml-2 font-cond text-base normal-case tracking-normal text-chalk-dim">{search.area}</span>}
         </h2>
         <span className="font-cond text-sm font-bold uppercase tracking-widest text-chalk-dim">
           {total} title shot{total === 1 ? "" : "s"} &middot; {search.companies.length} opponent

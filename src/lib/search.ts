@@ -86,8 +86,8 @@ export async function firecrawlScrape(
 }
 
 // Pull [text](url) links out of Firecrawl markdown. Job boards put each posting's title in the link text.
-export function markdownLinks(markdown: string): { text: string; url: string }[] {
-  const out: { text: string; url: string }[] = [];
+export function markdownLinks(markdown: string): { text: string; url: string; context: string }[] {
+  const out: { text: string; url: string; context: string }[] = [];
   const seen = new Set<string>();
   const re = /\[((?:[^\[\]]|\[[^\]]*\])*)\]\((https?:\/\/[^)\s]+)\)/g;
   let m: RegExpExecArray | null;
@@ -105,7 +105,9 @@ export function markdownLinks(markdown: string): { text: string; url: string }[]
       .slice(0, 160);
     if (!text || text.startsWith("!") || seen.has(url)) continue;
     seen.add(url);
-    out.push({ text, url });
+    const after = markdown.slice(m.index + m[0].length, m.index + m[0].length + 220);
+    const context = after.split(/\n\s*[-*]\s|\[/)[0].replace(/\\/g, "").replace(/\s+/g, " ").trim().slice(0, 120);
+    out.push({ text, url, context });
   }
   return out;
 }

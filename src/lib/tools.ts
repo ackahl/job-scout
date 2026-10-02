@@ -2,9 +2,9 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { companyTokens, hostOf, isAtsHost, isBlockedHost, listingUrlFor, looksLikePosting, pickBoard, scoreBoardCandidate } from "./board";
-import { chooseBoard, extractRows, selectPostings } from "./extract";
+import { areaText, chooseBoard, extractRows, selectPostings } from "./extract";
 import { firecrawlScrape, markdownLinks, tavilySearch, type ScrapedPage, type TavilyResult } from "./search";
-import type { CompanyResult, Employer, RoleSearch } from "./types";
+import type { Area, CompanyResult, Employer, RoleSearch } from "./types";
 
 export const MAX_EMPLOYERS = 6;
 const POSTINGS_PER_COMPANY = 4;
@@ -58,6 +58,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "array",
           items: { type: "string" },
           description: "Optional: limit the search to these saved companies. Omit to search every saved company.",
+        },
+        location: {
+          type: "string",
+          description: "Optional: city and state to search near, e.g. 'Yukon, OK'. Use the challenger's home turf unless they ask for somewhere else or for anywhere.",
+        },
+        radius_miles: {
+          type: "number",
+          description: "Optional: how far from location to search, in miles. Omit for any distance.",
         },
       },
       required: [],
@@ -195,7 +203,8 @@ export async function runUpdateEmployerList(
 
 type Candidate = { text: string; url: string };
 
-async function candidatePostings(employer: Employer, role: string): Promise<Candidate[]> {
+async function candidatePostings(employer: Employer, role: string, area: Area | null): Promise<Candidate[]> {
+  const where = area?.radiusMiles ? ` ${area.location}` : "";
   const tokens = companyTokens(employer.name);
   const t = tokens[0] ?? "~";
   const out: Candidate[] = [];
@@ -214,19 +223,19 @@ async function candidatePostings(employer: Employer, role: string): Promise<Cand
 
   // 2) Search the board's domains for this role.
   const siteTask = employer.boardDomains.length
-    ? tavilySearch(role ? `${role} ${employer.name}` : `${employer.name} job opening apply`, { includeDomains: employer.boardDomains, maxResults: 10 }).catch(() => [])
+    ? tavilySearch(role ? `${role} ${employer.name}${where}` : `${employer.name} job opening${where}`, { includeDomains: employer.boardDomains, maxResults: 10 }).catch(() => [])
     : Promise.resolve([] as TavilyResult[]);
 
   const [landing, site] = await Promise.all([listingTask, siteTask]);
   const listing = landing ? await followToListing(landing) : null;
-  if (listing) for (const l of postingLinks(listing.markdown, employer.boardUrl)) add(l);
+  if (listing) for (const l of postingLinks(listing.markdown, employer.boardUrl)) add({ text: l.context ? `${l.text} | ${l.context}` : l.text, url: l.url });
   for (const r of site) {
     if (!isBlockedHost(hostOf(r.url)) && looksLikePosting(r.url, employer.boardUrl)) add({ text: r.title, url: r.url });
   }
 
   // 3) Thin results: open web search, keeping only the company's own site or an ATS page naming the company.
   if (out.length < 3) {
-    const open = await tavilySearch(`"${employer.name}" ${role || "job opening"} job`, {
+    const open = await tavilySearch(`"${employer.name}" ${role || "job opening"} job${where}`, {
       maxResults: 10,
       excludeDomains: BLOCKED_FOR_SEARCH,
     }).catch(() => []);
@@ -244,19 +253,21 @@ async function searchCompanyOnce(
   employer: Employer,
   role: string,
   status: Status,
+  area: Area | null,
 ): Promise<{ result: CompanyResult; learnedHosts: string[] }> {
   const base = { company: employer.name, boardUrl: employer.boardUrl };
   try {
-    const candidates = await candidatePostings(employer, role);
+    const candidates = await candidatePostings(employer, role, area);
     if (candidates.length === 0) {
       return { result: { ...base, rows: [], note: "Couldn't find any postings on this company's job board." }, learnedHosts: [] };
     }
     // No role: take the board's newest postings as listed. With a role: let the model pick the matches.
-    const picks = role
-      ? await selectPostings(employer.name, role, candidates, POSTINGS_PER_COMPANY)
-      : candidates.slice(0, POSTINGS_PER_COMPANY + 1).map((_, i) => i);
+    const picks =
+      role || area?.radiusMiles
+        ? await selectPostings(employer.name, role, candidates, POSTINGS_PER_COMPANY + 1, area)
+        : candidates.slice(0, POSTINGS_PER_COMPANY + 1).map((_, i) => i);
     if (picks.length === 0) {
-      return { result: { ...base, rows: [], note: `Checked ${candidates.length} postings; none match this role.` }, learnedHosts: [] };
+      return { result: { ...base, rows: [], note: `Checked ${candidates.length} postings; none match${role ? " this role" : ""}${area?.radiusMiles ? ` ${areaText(area)}` : ""}.` }, learnedHosts: [] };
     }
     const chosen = picks.map((i) => candidates[i]);
     status(`Tag partner Jax "The Jackhammer" Offerletter is tearing through ${chosen.length} posting${chosen.length > 1 ? "s" : ""} at ${employer.name}...`);
@@ -266,11 +277,11 @@ async function searchCompanyOnce(
     if (pages.length === 0) {
       return { result: { ...base, rows: [], note: "Found matching postings but couldn't open them." }, learnedHosts: [] };
     }
-    const rows = await extractRows(employer.name, role, pages);
+    const rows = await extractRows(employer.name, role, pages, area);
     const order = { open: 0, unverified: 1, closed: 2 } as const;
     rows.sort((a, b) => order[a.status] - order[b.status]);
     return {
-      result: rows.length > 0 ? { ...base, rows } : { ...base, rows: [], note: "Postings found, but none matched this role." },
+      result: rows.length > 0 ? { ...base, rows } : { ...base, rows: [], note: `Postings found, but none matched${role ? " this role" : ""}${area?.radiusMiles ? ` ${areaText(area)}` : ""}.` },
       learnedHosts: rows.map((r) => hostOf(r.url)).filter(Boolean),
     };
   } catch (error) {
@@ -285,24 +296,25 @@ async function searchCompany(
   employer: Employer,
   role: string,
   status: Status,
+  area: Area | null,
 ): Promise<{ result: CompanyResult; learnedHosts: string[] }> {
-  const first = await searchCompanyOnce(employer, role, status);
+  const first = await searchCompanyOnce(employer, role, status, area);
   if (!role || first.result.rows.length > 0) return first;
   status(`No "${role}" title shots at ${employer.name}... pulling everything they DO have open...`);
-  const any = await searchCompanyOnce(employer, "", status);
+  const any = await searchCompanyOnce(employer, "", status, area);
   if (any.result.rows.length === 0) return first;
   return {
     result: {
       ...any.result,
       fallback: true,
-      note: `No "${role}" openings at ${employer.name} right now. Here's what they do have open:`,
+      note: `No "${role}" openings at ${employer.name}${area?.radiusMiles ? ` ${areaText(area)}` : ""} right now. Here's what they do have open${area?.radiusMiles ? " in range" : ""}:`,
     },
     learnedHosts: any.learnedHosts,
   };
 }
 
 export async function runFindOpenRoles(
-  input: { role?: string; companies?: string[] },
+  input: { role?: string; companies?: string[]; location?: string; radius_miles?: number },
   employers: Employer[],
   status: Status,
 ): Promise<{ search: RoleSearch | null; employers: Employer[]; forModel: string }> {
@@ -318,11 +330,14 @@ export async function runFindOpenRoles(
   const list = targets.length > 0 ? targets : employers;
 
   const role = input.role?.trim() ?? "";
+  const area: Area | null = input.location?.trim()
+    ? { location: input.location.trim(), radiusMiles: input.radius_miles && input.radius_miles > 0 ? Math.round(input.radius_miles) : null }
+    : null;
   const label = role || "All openings";
   status(`Storming the job boards of ${list.map((e) => e.name).join(", ")} for ${role ? `"${role}"` : "every open title shot"}...`);
-  const outcomes = await Promise.all(list.map((e) => searchCompany(e, role, status)));
+  const outcomes = await Promise.all(list.map((e) => searchCompany(e, role, status, area)));
   const companies = outcomes.map((o) => o.result);
-  const search: RoleSearch = { role: label, companies };
+  const search: RoleSearch = { role: label, companies, ...(area?.radiusMiles ? { area: areaText(area) } : {}) };
 
   // Remember any new job-posting hosts we confirmed, so the next search looks there directly.
   const learned = new Map(list.map((e, i) => [e.name, outcomes[i].learnedHosts]));
@@ -337,6 +352,7 @@ export async function runFindOpenRoles(
     forModel: JSON.stringify({
       note: "The app already shows these results to the user as a table grouped by company. Do not repeat the table.",
       role: label,
+      location_filter: area?.radiusMiles ? areaText(area) : "none",
       results: companies.map((c) => ({
         company: c.company,
         job_board: c.boardUrl,

@@ -29,13 +29,22 @@ const BodySchema = z.object({
     .min(1)
     .max(60),
   employers: z.array(EmployerSchema).max(10).default([]),
+  homeBase: z
+    .object({ location: z.string().max(120), radiusMiles: z.number().int().min(1).max(500).nullable() })
+    .nullable()
+    .optional(),
 });
 
 const UpdateInput = z.object({
   action: z.enum(["add", "remove", "replace"]),
   companies: z.array(z.string().max(120)).min(1).max(10),
 });
-const FindInput = z.object({ role: z.string().max(200).optional(), companies: z.array(z.string()).optional() });
+const FindInput = z.object({
+  role: z.string().max(200).optional(),
+  companies: z.array(z.string()).optional(),
+  location: z.string().max(120).optional(),
+  radius_miles: z.number().min(0).max(500).optional(),
+});
 
 function missingKeys() {
   return ["ANTHROPIC_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"].filter((k) => !process.env[k]);
@@ -85,7 +94,7 @@ export async function POST(request: Request) {
             response = await client.messages.create({
               model,
               max_tokens: 1500,
-              system: systemPrompt(employers.map((e) => e.name)),
+              system: systemPrompt(employers.map((e) => e.name), body.homeBase ?? null),
               tools: TOOL_DEFINITIONS,
               messages,
             });

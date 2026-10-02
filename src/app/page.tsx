@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CaseFile } from "@/components/CaseFile";
 import { SuspectBoard } from "@/components/SuspectBoard";
+import { HomeTurf, type HomeBase } from "@/components/HomeTurf";
 import { AGENT_NAME, AGENT_TITLE, OPENING_LINE } from "@/lib/persona";
 import type { ChatTurn, Employer, RoleSearch, StreamEvent } from "@/lib/types";
 
@@ -22,6 +23,7 @@ const SUGGESTIONS = [
 
 const SESSION_KEY = "job-scout:session";
 const EMPLOYERS_KEY = "job-scout:employers";
+const TURF_KEY = "job-scout:home-turf";
 
 function newSessionId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -56,6 +58,11 @@ function toHistory(items: Item[]): ChatTurn[] {
 export default function Home() {
   const [items, setItems] = useState<Item[]>([]);
   const [employers, setEmployers] = useState<Employer[]>([]);
+  const [turf, setTurf] = useState<HomeBase>({ location: "", radiusMiles: 25 });
+  function updateTurf(v: HomeBase) {
+    setTurf(v);
+    store(TURF_KEY, JSON.stringify(v));
+  }
   const [sessionId, setSessionId] = useState<string>("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,6 +75,8 @@ export default function Home() {
       id = localStorage.getItem(SESSION_KEY) ?? "";
       const saved = localStorage.getItem(EMPLOYERS_KEY);
       if (saved) setEmployers(JSON.parse(saved) as Employer[]);
+      const savedTurf = localStorage.getItem(TURF_KEY);
+      if (savedTurf) setTurf(JSON.parse(savedTurf) as HomeBase);
     } catch {
       /* ignore */
     }
@@ -105,7 +114,12 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, messages: toHistory(next), employers }),
+        body: JSON.stringify({
+          sessionId,
+          messages: toHistory(next),
+          employers,
+          homeBase: turf.location.trim() ? { location: turf.location.trim(), radiusMiles: turf.radiusMiles } : null,
+        }),
       });
       if (!res.ok || !res.body) {
         const err = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -192,6 +206,7 @@ export default function Home() {
       </header>
 
       <SuspectBoard employers={employers} />
+      <HomeTurf value={turf} onChange={updateTurf} />
 
       <main className="mx-auto w-full max-w-4xl flex-1 space-y-5 px-4 py-6">
         <MaxPromo text={OPENING_LINE} />
