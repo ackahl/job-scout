@@ -43,7 +43,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Search the saved companies' job boards for open postings, and return each posting's " +
       "title, location, pay, status and link. Call this when the user asks what jobs, openings, roles or positions " +
       "are available (e.g. 'any data analyst jobs?', 'find me HR manager roles', 'what's open at Devon?'). " +
-      "Pass a role to search for one kind of job; omit role to get each company's newest openings across all roles. "The saved employer list must not be " +
+      "Pass a role to search for one kind of job; omit role to get each company's newest openings across all roles. " +
+      "The saved employer list must not be " +
       "empty; if the user names new companies in the same message, call update_employer_list first. " +
       "Do not call this for general career advice, interview prep, resume questions or salary negotiation.",
     input_schema: {
