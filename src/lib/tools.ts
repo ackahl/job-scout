@@ -158,7 +158,7 @@ async function searchCompany(employer: Employer, role: string, status: Status): 
     if (candidates.length === 0) {
       return { ...base, rows: [], note: "No matching postings found on this company's job board." };
     }
-    status(`Tag partner Jax Offerletter is jackhammering ${candidates.length} posting${candidates.length > 1 ? "s" : ""} at ${employer.name}...`);
+    status(`Tag partner Jax "The Jackhammer" Offerletter is tearing through ${candidates.length} posting${candidates.length > 1 ? "s" : ""} at ${employer.name}...`);
     const pages = (await Promise.all(candidates.map((c) => firecrawlScrape(c.url)))).filter(
       (p): p is NonNullable<typeof p> => p !== null && p.markdown.length > 200,
     );
